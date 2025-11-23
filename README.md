@@ -17,7 +17,7 @@ This project delivers an intelligent, multilingual chatbot capable of natural, c
 
 - **Python 3**: Core programming language.
 - **Hugging Face Inference API**:
-  - **Primary**: `lxyuan/distilbert-base-multilingual-cased-sentiments-student` (20+ languages).
+  - **Primary**: `tabularisai/multilingual-sentiment-analysis` (22 languages: English, Chinese, Spanish, Hindi, Arabic, Bengali, Portuguese, Russian, Japanese, German, Malay, Telugu, Vietnamese, Korean, French, Turkish, Italian, Polish, Ukrainian, Tagalog, Dutch, Swiss German, and Swahili).
   - **Hinglish**: `pascalrai/hinglish-twitter-roberta-base-sentiment` (Specialized for Hindi-English code-mixing).
 - **FastAPI**: For the web interface backend.
 
@@ -81,12 +81,14 @@ The system uses a **multi-layered detection approach** to accurately identify Hi
 - **Mapping**: Direct mapping to sentiment labels
 
 **For Standard Input (English, Hindi, Spanish, etc.)**:
-- **Model**: Hugging Face Inference API with `lxyuan/distilbert-base-multilingual-cased-sentiments-student`
-- **Output**: `positive`, `negative`, or `neutral` with confidence score
+- **Model**: Hugging Face Inference API with `tabularisai/multilingual-sentiment-analysis`
+- **Output**: 5 explicit classes: `very negative`, `negative`, `neutral`, `positive`, `very positive`
 - **Mapping**: 
-  - Score > 0.9 → **Very Positive/Very Negative**
-  - Score ≤ 0.9 → **Positive/Negative** (scaled by 0.5)
-  - Neutral → 0.0
+  - `very positive` → **Very Positive** (compound: +1.0 × score)
+  - `positive` → **Positive** (compound: +0.5 × score)
+  - `neutral` → **Neutral** (compound: 0.0)
+  - `negative` → **Negative** (compound: -0.5 × score)
+  - `very negative` → **Very Negative** (compound: -1.0 × score)
 
 #### 3. Conversation Analysis
 - **Overall Sentiment**: Calculated by averaging the compound scores of all user messages

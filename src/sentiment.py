@@ -26,8 +26,8 @@ load_dotenv()
 class SentimentEngine:
     def __init__(self):
         self.use_vader = False
-        # Primary Multilingual Model (API)
-        self.model_id = "lxyuan/distilbert-base-multilingual-cased-sentiments-student"
+        # Primary Multilingual Model (API) - Supports 22 languages
+        self.model_id = "tabularisai/multilingual-sentiment-analysis"
         
         # Specialized Hinglish Model (Local Pipeline)
         print("Initializing local Hinglish model (this may take a moment)...")
@@ -40,10 +40,24 @@ class SentimentEngine:
         
         # Hinglish indicators (common words)
         self.hinglish_words = {
-            'kya', 'kyu', 'kaise', 'kese', 'tha', 'thi', 'the', 'hai', 'h', 'ho', 
-            'bhai', 'matlab', 'nhi', 'nahi', 'acha', 'bura', 'sahi', 'galat', 
-            'pyaar', 'pasand', 'mujhe', 'tu', 'tum', 'hum', 'main', 'mera', 'meri', 
-            'karna', 'kar', 'raha', 'rahi', 'dekh', 'sun', 'bol', 'heh', 'pasandh'
+            # Question words
+            'kya', 'kyu', 'kyun', 'kaise', 'kese', 'kab', 'kahan', 'kaun', 'kitna', 'kitne',
+            # Verbs
+            'tha', 'thi', 'the', 'hai', 'h', 'ho', 'hoon', 'hain', 'hoga', 'hogi', 'hoge',
+            'kar', 'karna', 'karo', 'karte', 'karta', 'karti', 'kiya', 'kiye', 'karu', 'karenge',
+            'raha', 'rahi', 'rahe', 'dekh', 'dekha', 'dekho', 'sun', 'suna', 'suno', 'bol', 'bola', 'bolo',
+            'laga', 'lagi', 'lage', 'lagta', 'lagti', 'lagte', 'aayi', 'aaya', 'aaye', 'aata', 'aati', 'aate',
+            # Pronouns
+            'tu', 'tum', 'hum', 'main', 'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'tumhara', 'tumhari', 'tumhare',
+            'mujhe', 'tujhe', 'tumhe', 'humko', 'tumko', 'usko', 'unko', 'isko', 'inko',
+            # Common words
+            'bhai', 'yaar', 'matlab', 'nhi', 'nahi', 'nahin', 'haan', 'ha', 'ji', 'kuch', 'koi',
+            'acha', 'achha', 'accha', 'achhi', 'achi', 'bura', 'buri', 'bure', 'sahi', 'galat', 'theek', 'thik',
+            'bahut', 'kaafi', 'bohot', 'zyada', 'jyada', 'kam', 'thoda', 'thodi', 'thode',
+            'pyaar', 'pasand', 'pasandh', 'nafrat', 'khushi', 'dukh', 'gussa',
+            'yeh', 'ye', 'woh', 'wo', 'yaha', 'yahan', 'waha', 'wahan', 'kaha', 'kahan',
+            'abhi', 'ab', 'phir', 'fir', 'par', 'lekin', 'aur', 'ya', 'ki', 'ke', 'ka',
+            'heh', 'hain', 'hoon', 'ho', 'hai'
         }
         
         # Try to load token
@@ -74,27 +88,35 @@ class SentimentEngine:
             # Detect language
             try:
                 lang = detect(text)
+                print(f"DEBUG: langdetect detected language: {lang} for text: '{text[:50]}...'")
             except LangDetectException:
                 # If detection fails, fall back to keyword matching
                 lang = None
+                print(f"DEBUG: langdetect failed, using keyword matching for: '{text[:50]}...'")
             
             # Check if text contains Devanagari script (pure Hindi)
             has_devanagari = any('\u0900' <= char <= '\u097F' for char in text)
             
             # If it's pure Devanagari Hindi, it's NOT Hinglish
             if has_devanagari:
+                print(f"DEBUG: Devanagari detected, NOT Hinglish")
                 return False
+            
+            # Check for Hindi keywords in the text
+            words = set(text.lower().split())
+            has_hindi_keywords = bool(words.intersection(self.hinglish_words))
             
             # If langdetect says it's Hindi but no Devanagari, it's likely Hinglish (Romanized)
             if lang == 'hi':
+                print(f"DEBUG: Detected as 'hi' (Hindi) in Latin script → Hinglish")
                 return True
             
-            # Additional check: if English but contains Hindi keywords, it's Hinglish
-            if lang == 'en':
-                words = set(text.lower().split())
-                if words.intersection(self.hinglish_words):
-                    return True
+            # If it has Hindi keywords (regardless of what langdetect says), it's Hinglish
+            if has_hindi_keywords:
+                print(f"DEBUG: Hindi keywords found ({words.intersection(self.hinglish_words)}) → Hinglish")
+                return True
             
+            print(f"DEBUG: No Hinglish indicators found → Standard")
             return False
             
         except ImportError:
@@ -151,25 +173,24 @@ class SentimentEngine:
 
                     print(f"DEBUG: Hugging Face API Output -> Label: {top_result.label}, Score: {score}")
 
-                    # Multilingual Model Mapping (Existing Logic)
-                    if 'positive' in label:
-                        if score > 0.9:
-                            compound = score
-                            display_label = 'Very Positive'
-                        else:
-                            compound = score * 0.5
-                            display_label = 'Positive'
-                    elif 'negative' in label:
-                        if score > 0.9:
-                            compound = -score
-                            display_label = 'Very Negative'
-                        else:
-                            compound = -score * 0.5
-                            display_label = 'Negative'
+                    # Tabularisai Model Mapping (5 classes: very negative, negative, neutral, positive, very positive)
+                    if 'very positive' in label or 'very_positive' in label:
+                        compound = score
+                        display_label = 'Very Positive'
+                    elif 'very negative' in label or 'very_negative' in label:
+                        compound = -score
+                        display_label = 'Very Negative'
+                    elif 'positive' in label and 'very' not in label:
+                        compound = score * 0.5
+                        display_label = 'Positive'
+                    elif 'negative' in label and 'very' not in label:
+                        compound = -score * 0.5
+                        display_label = 'Negative'
                     elif 'neutral' in label:
                         compound = 0
                         display_label = 'Neutral'
                     else:
+                        # Fallback
                         compound = 0
                         display_label = label.title()
 
