@@ -1,0 +1,180 @@
+Use this as a single “system-style” prompt for Cursor so it generates the whole project around your model and (optionally) Neo4j.
+
+***
+
+**Prompt for Cursor**
+
+You are an expert Python backend engineer.  
+Build a small, production-minded sentiment-aware chatbot project with the following requirements.
+
+### 1. Overall requirements
+
+- Language: Python 3.11+  
+- Framework: FastAPI  
+- Packaging: `pyproject.toml` using `uv` or `poetry` style  
+- Structure should be modular and production-minded, with clear separation of concerns:
+  - `app/main.py` – FastAPI entrypoint
+  - `app/config.py` – settings (env-based)
+  - `app/models.py` – Pydantic models for requests/responses
+  - `app/services/sentiment.py` – Hugging Face DistilBERT sentiment logic
+  - `app/services/chatbot.py` – chatbot response logic and conversation sentiment aggregation
+  - `app/storage/memory.py` – in-memory conversation store (dict) for assignment
+  - `app/storage/neo4j_store.py` – optional Neo4j-backed conversation store (see credentials below)
+  - `app/api/routes.py` – HTTP routes
+  - `app/utils/logging.py` – logging setup
+
+- Add type hints everywhere and docstrings for public functions.
+- Add minimal tests in `tests/` showing:
+  - per-message sentiment works
+  - conversation-level sentiment summary works
+
+### 2. Sentiment model (mandatory)
+
+Use this exact model and base code, but wrap it in a clean service:
+
+```python
+import torch
+from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+
+tokenizer = DistilBertTokenizer.from_pretrained(
+    "distilbert-base-uncased-finetuned-sst-2-english"
+)
+model = DistilBertForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased-finetuned-sst-2-english"
+)
+
+def predict_sentiment(text: str) -> dict:
+    """
+    Returns {'label': 'POSITIVE' or 'NEGATIVE', 'score': float}
+    """
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    probs = torch.softmax(logits, dim=-1)[0]
+    class_id = int(torch.argmax(probs).item())
+    label = model.config.id2label[class_id]
+    score = float(probs[class_id].item())
+    return {"label": label, "score": score}
+```
+
+- Encapsulate this logic in `app/services/sentiment.py` as a class `DistilBertSentimentService`.
+- Ensure model and tokenizer are loaded once at process start (singleton pattern or module-level instance).
+
+### 3. Assignment logic (Tier 1 & Tier 2)
+
+Implement the assignment behavior over HTTP:
+
+- Maintain full conversation history per `conversation_id`.
+- For each **user** message:
+  - Run statement-level sentiment (Tier 2).
+  - Store message text, role, timestamp, and sentiment.
+  - Generate a simple, rule-based chatbot reply string (no LLM needed).
+- At the end, compute conversation-level sentiment (Tier 1):
+  - Aggregate all user sentiment scores and produce:
+    - `overall_label` (Positive / Negative / Neutral)
+    - `avg_score` (float)
+    - `trend` (Improving / Worsening / Stable) based on first vs last sentiment score
+- API should support:
+
+1. `POST /chat/message`
+   - Request body: `{ "conversation_id": "string", "message": "string" }`
+   - Behavior:
+     - Store user message with sentiment (Tier 2).
+     - Append bot reply (without sentiment).
+   - Response:
+     ```json
+     {
+       "conversation_id": "...",
+       "user_message": { "text": "...", "sentiment": { "label": "...", "score": 0.0 } },
+       "bot_reply": { "text": "..." }
+     }
+     ```
+
+2. `GET /chat/{conversation_id}/history`
+   - Returns ordered list of all messages with sentiment only for user messages.
+
+3. `GET /chat/{conversation_id}/summary`
+   - Returns conversation-level sentiment summary:
+     ```json
+     {
+       "conversation_id": "...",
+       "overall_label": "Overall Positive | Overall Neutral | Overall Negative",
+       "avg_score": 0.0,
+       "trend": "Improving mood over time | Worsening mood over time | Stable",
+       "user_message_count": 0
+     }
+     ```
+
+- Chatbot reply logic can be simple rule-based:
+  - If negative sentiment: apologize and ask for more details.
+  - If positive: acknowledge happiness.
+  - Else: neutral acknowledgement.
+
+### 4. Storage layer
+
+Implement two pluggable storage backends via an interface:
+
+- Define an abstract base `ConversationStore` with methods:
+  - `add_message(conversation_id, role, text, sentiment_dict_or_none)`
+  - `get_history(conversation_id) -> list[Message]`
+- Implement:
+
+1. `InMemoryConversationStore` in `app/storage/memory.py`
+   - Use a dict: `Dict[str, List[Message]]`.
+
+2. `Neo4jConversationStore` in `app/storage/neo4j_store.py`
+   - Only implement if explicitly enabled by config.
+   - Use the following environment variables / credentials:
+
+     ```
+     NEO4J_URI=neo4j+s://22e8bd03.databases.neo4j.io
+     NEO4J_USERNAME=neo4j
+     NEO4J_PASSWORD=H4GRvj9jaq3TsIuszrCOPbFPchoGhB-ZcoLgoeAt_lo
+     NEO4J_DATABASE=neo4j
+     AURA_INSTANCEID=22e8bd03
+     AURA_INSTANCENAME=Instance01
+     ```
+
+   - Model graph schema:
+     - `(:Conversation {id})-[:HAS_MESSAGE]->(:Message {role, text, sentiment_label, sentiment_score, timestamp})`.
+   - Provide Cypher create and fetch functions.
+
+- In `app/config.py`, add a flag `USE_NEO4J` to switch between backends.
+
+### 5. FastAPI wiring
+
+- In `app/main.py`:
+  - Initialize settings from env.
+  - Initialize the sentiment service and conversation store.
+  - Wire them into routers with FastAPI dependencies.
+- Add basic CORS middleware to allow localhost frontends.
+- Use `uvicorn` command in README:  
+  `uvicorn app.main:app --reload`
+
+### 6. Non-functional requirements
+
+- Add logging for:
+  - Incoming requests
+  - Sentiment predictions (label + short text snippet)
+  - Errors in Neo4j or model loading
+- Add simple error handling:
+  - 422 on empty messages or missing conversation_id.
+- Add a `README.md` that:
+  - Explains how to create a virtualenv
+  - How to install dependencies
+  - How to run the server
+  - How to test the endpoints with curl or HTTP client.
+
+### 7. What to output
+
+Generate:
+
+1. `pyproject.toml` with dependencies:
+   - `fastapi`, `uvicorn[standard]`, `transformers`, `torch`, `pydantic`, `python-dotenv`, `neo4j` (or `neo4j-driver`), `pytest`
+2. Full source tree under `app/` and `tests/`.
+3. Example `curl` commands in `README.md` for:
+   - Sending a message
+   - Getting history
+   - Getting summary
+
+D

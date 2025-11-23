@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentiment Chatbot</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Sentiment Chatbot</h1>
+            <div class="controls">
+                <button class="btn-reset" onclick="resetChat()">Reset</button>
+                <button class="btn-analyze" onclick="showAnalysis()">End & Analyze</button>
+            </div>
+        </header>
+
+        <div id="chat-history">
+            <!-- Messages will appear here -->
+            <div class="message-wrapper bot">
+                <div class="message-content">
+                    Hello! I'm ready to chat. I'll analyze the sentiment of our conversation.
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="Type your message..." autocomplete="off">
+            <button class="btn-send" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <div id="analysis-modal" class="modal">
+        <div class="modal-content">
+            <h2>Conversation Analysis</h2>
+            <div class="analysis-grid">
+                <div class="analysis-item">
+                    <div class="analysis-label">Overall Sentiment</div>
+                    <div class="analysis-value" id="final-label">-</div>
+                </div>
+                <div class="analysis-item">
+                    <div class="analysis-label">Compound Score</div>
+                    <div class="analysis-value" id="final-score">-</div>
+                </div>
+                <div class="analysis-item" style="grid-column: span 2;">
+                    <div class="analysis-label">Mood Trend</div>
+                    <div class="analysis-value" id="final-trend">-</div>
+                </div>
+            </div>
+
+            <div class="chart-container" style="position: relative; height:200px; width:100%; margin-bottom: 1.5rem;">
+                <canvas id="sentimentChart"></canvas>
+            </div>
+
+            <button class="close-modal" onclick="closeModal()">Close</button>
+        </div>
+    </div>
+
+    <script>
+        const inputField = document.getElementById('user-input');
+        const chatHistory = document.getElementById('chat-history');
+        const modal = document.getElementById('analysis-modal');
+        let sentimentChart = null;
+
+        inputField.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        async function sendMessage() {
+            const text = inputField.value.trim();
+            if (!text) return;
+
+            // Clear input
+            inputField.value = '';
+
+            // Add user message to UI immediately
+            appendMessage('user', text, null);
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+
+                const data = await response.json();
+
+                // Update last user message with sentiment (Tier 2)
+                updateLastUserMessageSentiment(data.user_sentiment);
+
+                // Add bot response
+                appendMessage('bot', data.bot_response);
+
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('bot', 'Sorry, something went wrong.');
+            }
+        }
+
+        function appendMessage(role, text, sentiment = null) {
+            const wrapper = document.createElement('div');
+            wrapper.className = `message-wrapper ${role}`;
+
+            let sentimentHtml = '';
+            if (sentiment) {
+                sentimentHtml = getSentimentHtml(sentiment);
+            }
+
+            wrapper.innerHTML = `
+                <div class="message-content">
+                    ${text}
+                </div>
+                ${sentimentHtml}
+            `;
+
+            chatHistory.appendChild(wrapper);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function updateLastUserMessageSentiment(sentiment) {
+            const userMessages = document.querySelectorAll('.message-wrapper.user');
+            const lastUserMsg = userMessages[userMessages.length - 1];
+            if (lastUserMsg) {
+                const sentimentTag = document.createElement('div');
+                sentimentTag.innerHTML = getSentimentHtml(sentiment);
+                lastUserMsg.appendChild(sentimentTag.firstElementChild);
+            }
+        }
+
+        function getSentimentHtml(sentiment) {
+            let className = 'sentiment-neu';
+            if (sentiment.label === 'Positive') className = 'sentiment-pos';
+            if (sentiment.label === 'Negative') className = 'sentiment-neg';
+            if (sentiment.label === 'Very Positive') className = 'sentiment-very-pos';
+            if (sentiment.label === 'Very Negative') className = 'sentiment-very-neg';
+
+            return `<div class="sentiment-tag ${className}">
+                ${sentiment.label} (${sentiment.compound.toFixed(2)})
+            </div>`;
+        }
+
+        async function showAnalysis() {
+            try {
+                const response = await fetch('/analysis');
+                const data = await response.json();
+
+                document.getElementById('final-label').textContent = data.label;
+                document.getElementById('final-score').textContent = data.compound.toFixed(2);
+                document.getElementById('final-trend').textContent = data.trend;
+
+                // Color code the final label
+                const labelEl = document.getElementById('final-label');
+                labelEl.className = 'analysis-value'; // Reset
+
+                if (data.label === 'Positive' || data.label === 'Very Positive') labelEl.style.color = 'var(--sentiment-pos)';
+                else if (data.label === 'Negative' || data.label === 'Very Negative') labelEl.style.color = 'var(--sentiment-neg)';
+                else labelEl.style.color = 'var(--text-primary)';
+
+                // Render Chart
+                renderChart(data.history_scores);
+
+                modal.style.display = 'flex';
+            } catch (error) {
+                console.error('Error fetching analysis:', error);
+            }
+        }
+
+        function renderChart(scores) {
+            const ctx = document.getElementById('sentimentChart').getContext('2d');
+
+            if (sentimentChart) {
+                sentimentChart.destroy();
+            }
+
+            // Create gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+            gradient.addColorStop(0, 'rgba(79, 70, 229, 0.5)');
+            gradient.addColorStop(1, 'rgba(79, 70, 229, 0.0)');
+
+            sentimentChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: scores.map((_, i) => `Msg ${i + 1}`),
+                    datasets: [{
+                        label: 'Sentiment Score',
+                        data: scores,
+                        borderColor: '#4f46e5',
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#ffffff',
+                        pointBorderColor: '#4f46e5',
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            min: -1,
+                            max: 1,
+                            grid: {
+                                color: '#f3f4f6'
+                            },
+                            ticks: {
+                                font: { family: 'Inter' }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                font: { family: 'Inter' }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: '#1f2937',
+                            padding: 10,
+                            cornerRadius: 8,
+                            callbacks: {
+                                label: function (context) {
+                                    return `Score: ${context.parsed.y.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function closeModal() {
+            modal.style.display = 'none';
+        }
+
+        async function resetChat() {
+            await fetch('/reset', { method: 'POST' });
+            chatHistory.innerHTML = `
+                <div class="message-wrapper bot">
+                    <div class="message-content">
+                        Conversation reset. I'm ready to chat again!
+                    </div>
+                </div>
+            `;
+            modal.style.display = 'none';
+        }
+    </script>
+</body>
+
+</html>
