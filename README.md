@@ -1,6 +1,6 @@
 # Sentiment Analysis Chatbot
+This project delivers an intelligent, multilingual chatbot capable of natural, context-aware conversations while performing both statement-level and conversation-level sentiment analysis. Built as a modular pipeline, it supports 20+ languages—including Hindi and Hinglish with strong code-mix handling—and ensures smooth operation through a robust fallback mechanism even when Hugging Face services fail. Designed for real-world use, the system offers consistent, fault-tolerant performance, accurate emotional insights, and seamless integration into broader AI applications.
 
-This project implements a chatbot capable of conducting a conversation and performing sentiment analysis at both the statement level and the conversation level.
 
 ## Features
 
